@@ -1,0 +1,6 @@
+name = Buhsoft Cash Desk
+description = Online cash desk for Buhsoft.ru and Commerce
+core = 7.x
+package = Commerce (contrib)
+dependencies[] = commerce
+dependencies[] = commerce_payment

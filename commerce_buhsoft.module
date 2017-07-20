@@ -1,0 +1,391 @@
+<?php
+
+/**
+ * Определяем константы
+ */
+define('BUHSOFT_API_URL', 'https://online.buhsoft.ru/online_kassa/api');
+define('BUHSOFT_METHOD_ADD', '/docs/add');
+define('BUHSOFT_METHOD_GET', '/docs/get');
+define('BUHSOFT_METHOD_SERVER_INFO', '/server/info');
+
+/**
+ * Implements hook_enable().
+ */
+function commerce_buhsoft_enable()
+{
+    $field_name = 'buhsoft_id';
+    $entity_type = 'commerce_order';
+    $bundle = 'commerce_order';
+    // Make sure the field doesn't already exist.
+    if (!field_info_field($field_name)) {
+        // Create the field.
+        $field = array(
+            'field_name' => $field_name,
+            'type' => 'text',
+            'settings' => array('max_length' => 255, 'indexes' => true),
+        );
+        field_create_field($field);
+
+        // Create the instance.
+        $instance = array('field_name' => $field_name,
+            'entity_type' => $entity_type,
+            'bundle' => $bundle,
+            'label' => 'Buhsoft ID',
+            'description' => 'Buhsoft ID (cash voucher) that get customer when we make in transaction',
+            'required' => false,
+        );
+        field_create_instance($instance);
+
+        watchdog('my_module', t('!field_name was added successfully.', array('!field_name' => $field_name)));
+    } else {
+        watchdog('my_module', t('!field_name already exists.', array('!field_name' => $field_name)));
+    }
+}
+
+
+/**
+ * Implements hook_field_access
+ */
+function commerce_buhsoft_field_access($op, $field, $entity_type, $entity, $account) {
+    // Define read only fields
+    $readonly = array('buhsoft_id');
+    if ($op == 'edit' && in_array($field['field_name'], $readonly)) {
+        // Disable edit.
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_buhsoft_menu()
+{
+    $items = array();
+
+    $items['admin/commerce/config/advanced-settings/commerce_buhsoft'] = array(
+        'title' => 'Buhsoft setting',
+        'description' => 'Set buhsoft system for online order checkout',
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('commerce_buhsoft_settings_form'),
+        'access arguments' => array('administer store'),
+        'file' => 'commerce_buhsoft.admin.inc',
+    );
+    return $items;
+}
+
+
+/**
+ * Implements hook_form_alter().
+ */
+function commerce_buhsoft_form_alter(&$form, &$form_state, $form_id)
+{
+    switch ($form_id) {
+        case "uc_order_view_update_form":
+            $order_id = (int)arg(3);
+            if (isset($order_id)) {
+                $order = uc_order_load($order_id);
+                if (isset($order)) {
+                    if ((!$order->buhsoft_id) && ($order->order_status == 'payment_received')) {
+                        $form['#submit'][] = 'commerce_buhsoft_uc_order_view_update_form_submit';
+                        $form['buh_soft_submit'] = array(
+                            '#type' => 'submit',
+                            '#name' => 'to_buhsoft_api',
+                            '#value' => t('To Buhsoft checkout'),
+                        );
+                        return $form;
+                        break;
+                    }
+                }
+            }
+            break;
+
+        case 'default':
+            break;
+    }
+}
+
+/**
+ * Большая функция, которая непосредственно и все отправляет в онлайн кассу
+ * @param $order
+ */
+function commerce_buhsoft_online_checkout($order)
+{
+
+    //проверяем на правильность валюты
+    if ($order->currency != 'RUB') {
+        drupal_set_message(t('Attention! You must convert you store main currency to rubles (RUB)!'), 'error');
+        return;
+    }
+
+    $params = array();
+
+    if (!variable_get('commerce_buhsoft_token', '')) {
+        drupal_set_message(t('You must setup Buhsoft module initially!'), 'error');
+        drupal_goto('admin/store/settings/commerce_buhsoft');
+        return;
+    }
+
+    $params['token'] = variable_get('commerce_buhsoft_token', '');
+
+    if (variable_get('commerce_buhsoft_diller', '')) {
+        $params['diller'] = variable_get('commerce_buhsoft_diller', '');
+    }
+
+    $params['cms'] = variable_get('commerce_buhsoft_cms', 'Drupal 7 / Ubercart 3');
+
+    if (isset($order->primary_email)) {
+        $params['email'] = $order->primary_email;
+    } else {
+        $params['email'] = variable_get('commerce_buhsoft_default_email', '');
+    }
+
+    if (isset($order->delivery_phone)) {
+        $params['phone'] = $order->delivery_phone;
+    } else {
+        $params['phone'] = variable_get('commerce_buhsoft_default_phone', '');
+    }
+
+    $params['print'] = variable_get('commerce_buhsoft_print', 1);
+
+    if (variable_get('commerce_buhsoft_name_cashier', '')) {
+        $params['name_cashier'] = variable_get('commerce_buhsoft_name_cashier', '');
+    }
+
+    $params['price']['nal'] = $order->order_total;
+
+    //Продажа смотреть тут https://online.buhsoft.ru/online_kassa/docs/dist/index.html
+    $params['typeOperation'] = 0;
+
+    $key = 0;
+
+    foreach ($order->products as $key => $product) {
+        $node = node_load($product->nid);
+        $params['data'][$key]['name'] = $product->title;
+        $params['data'][$key]['count'] = $product->qty;
+        $params['data'][$key]['price'] = number_format($product->price, 2, '.', '');
+        $params['data'][$key]['type_nds'] = variable_get('commerce_buhsoft_vat_' . $node->type, 1);
+
+    }
+
+    if (isset($order->quote['rate'])) {
+        if ($order->quote['rate'] > 0) {
+            $key++;
+            $params['data'][$key]['name'] = 'Доствка заказа №' . $order->order_id;
+            $params['data'][$key]['count'] = 1;
+            $params['data'][$key]['price'] = number_format($order->quote['rate'], 2, '.', '');
+            $params['data'][$key]['type_nds'] = variable_get('commerce_buhsoft_vat_delivery', 1);
+
+        }
+    }
+
+    $response = _commerce_buhsoft_http_get_request(BUHSOFT_API_URL, BUHSOFT_METHOD_ADD, $params);
+
+    if ($response->code != 200) {
+        $message = t('Error code is "%code%". Status is "%status_message%".', array(
+            '%code%' => $response->code,
+            '%status_message%' => $response->status_message,
+        ));
+        drupal_set_message($message, 'error');
+        watchdog('error', $message);
+        return;
+    }
+
+    $data = json_decode($response->data);
+
+    if ($data->ok != '1') {
+        $message = t('Error code is "%error_code%". Error message is "%error_message%".', array(
+            '%error_code%' => $data->error_code,
+            '%error_message%' => $data->error_message,
+        ));
+        drupal_set_message($message, 'error');
+        watchdog('error', $message);
+        return;
+    } else {
+        // записываем ID
+        $order->buhsoft_id = $data->guid;
+        uc_order_save($order);
+        $message = t('Buhsoft server responded: guid is "%guid%", time is "%time%".', array('%guid%' => $data->guid, '%time%' => $data->time));
+        uc_order_comment_save($order->order_id, 1, $message, 'admin');
+        drupal_set_message($message, 'status');
+        watchdog('status', $message);
+
+        return $data->guid;
+    }
+}
+
+
+/**
+ * Отправка заказа в Buhsoft для онлайн кассы
+ * @param $form
+ * @param $form_state
+ */
+function commerce_buhsoft_uc_order_view_update_form_submit(&$form, &$form_state)
+{
+    if ($form_state['triggering_element']['#name'] == 'to_buhsoft_api') {
+        $order_id = (int)arg(3);
+        if (isset($order_id)) {
+            $order = uc_order_load($order_id);
+            if (isset($order)) {
+                commerce_buhsoft_online_checkout($order);
+            }
+        }
+    }
+}
+
+/**
+ * Запрос в систему Buhsoft через cUrl
+ * @param $url
+ * @param $method
+ * @param $params
+ * @return mixed
+ */
+function _commerce_buhsoft_curl_request($url, $method, $params)
+{
+    $curl = curl_init();
+    curl_setopt($curl, CURLOPT_URL, $url . $method);
+    curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($curl, CURLOPT_POST, true);
+    curl_setopt($curl, CURLOPT_POSTFIELDS, http_build_query($params));
+    $response = curl_exec($curl);
+    curl_close($curl);
+    return $response;
+}
+
+
+/**
+ * Запрос в систему Buhsoft через file_get_content (Drupalовская внутренняя функция drupal_http_request)
+ * @param $url
+ * @param $method
+ * @param $params
+ * @return object
+ */
+function _commerce_buhsoft_http_get_request($url, $method, $params)
+{
+    //странно но не работает через передачу параметров не через командную строку а как положено.
+    return drupal_http_request($url . $method . '?' . http_build_query($params));
+}
+
+
+/**
+ * Implements hook_uc_order_pane_alter().
+ */
+function commerce_buhsoft_uc_order_pane_alter(&$panes)
+{
+    $panes['payment']['callback'] = 'commerce_buhsoft_uc_payment_pane_callback';
+}
+
+
+/**
+ * Переделываем панели
+ * @param $op
+ * @param $order
+ * @param null $form
+ * @param null $form_state
+ * @return string
+ */
+function commerce_buhsoft_uc_payment_pane_callback($op, $order, &$form = NULL, &$form_state = NULL)
+{
+    switch ($op) {
+        case 'view':
+            $build['balance'] = array('#markup' => t('Balance: @balance', array('@balance' => uc_currency_format(uc_payment_balance($order)))));
+
+            if (user_access('view payments')) {
+                $build['view_payments'] = array(
+                    '#markup' => ' (' . l(t('View'), 'admin/store/orders/' . $order->order_id . '/payments') . ')',
+                );
+            }
+
+            $method_name = _uc_payment_method_data($order->payment_method, 'review');
+            if (empty($method_name)) {
+                $method_name = _uc_payment_method_data($order->payment_method, 'name');
+            }
+            $build['method'] = array(
+                '#markup' => t('Method: @payment_method', array('@payment_method' => $method_name)),
+                '#prefix' => '<br />',
+            );
+            $func = _uc_payment_method_data($order->payment_method, 'callback');
+            if (function_exists($func)) {
+                $method_output = $func('order-view', $order);
+                if (!empty($method_output)) {
+                    $build['output'] = $method_output + array(
+                            '#prefix' => '<br />',
+                        );
+                }
+            }
+
+            $build['buhsoft_id'] = array('#prefix' => '<br />',
+                '#markup' => t('Buhsoft transaction ID: %buhsoft_id%', array('%buhsoft_id%' => $order->buhsoft_id)));
+            return $build;
+
+        case 'customer':
+            $method_name = _uc_payment_method_data($order->payment_method, 'review');
+            if (empty($method_name)) {
+                $method_name = _uc_payment_method_data($order->payment_method, 'name');
+            }
+            $build['method'] = array('#markup' => t('Method: @payment_method', array('@payment_method' => $method_name)));
+            $func = _uc_payment_method_data($order->payment_method, 'callback');
+            if (function_exists($func)) {
+                $method_output = $func('customer-view', $order);
+                if (!empty($method_output)) {
+                    $build['output'] = $method_output + array(
+                            '#prefix' => '<br />',
+                        );
+                }
+            }
+
+            return $build;
+
+        case 'edit-form':
+            $methods = _uc_payment_method_list();
+            $options = array();
+            foreach ($methods as $id => $method) {
+                $options[$id] = $method['name'];
+            }
+            $form['payment']['payment_method'] = array(
+                '#type' => 'select',
+                '#title' => t('Payment method'),
+                '#default_value' => $order->payment_method,
+                '#options' => !empty($options) ? $options : array(t('None available')),
+                '#disabled' => empty($options),
+                '#ajax' => array(
+                    'callback' => 'uc_payment_order_pane_ajax_callback',
+                    'progress' => array('type' => 'throbber'),
+                    'wrapper' => 'payment-details',
+                ),
+            );
+
+            $form['payment']['payment_details'] = array(
+                '#tree' => TRUE,
+                '#prefix' => '<div id="payment-details">',
+                '#suffix' => '</div>',
+            );
+
+            $method = isset($form_state['values']['payment_method']) ? $form_state['values']['payment_method'] : $order->payment_method;
+            $func = _uc_payment_method_data($method, 'callback');
+            if (function_exists($func) && $details = $func('order-details', $order)) {
+                if (is_array($details)) {
+                    $form['payment']['payment_details'] += $details;
+                } else {
+                    $form['payment']['payment_details']['#markup'] = $details;
+                }
+            }
+            return $form;
+
+        case 'edit-theme':
+            return drupal_render($form['payment']);
+
+        case 'edit-process':
+            $changes['payment_method'] = $form_state['values']['payment_method'];
+            $changes['payment_details'] = isset($form_state['values']['payment_details']) ? $form_state['values']['payment_details'] : array();
+            $func = _uc_payment_method_data($form_state['values']['payment_method'], 'callback');
+            if (function_exists($func) && ($return = $func('edit-process', $order, $form, $form_state)) != NULL && is_array($return)) {
+                $changes['payment_details'] = array_merge($changes['payment_details'], $return);
+            }
+
+            if (!isset($order->payment_details)) {
+                $order->payment_details = array();
+            }
+            return $changes;
+    }
+}
