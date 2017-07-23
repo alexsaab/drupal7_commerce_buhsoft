@@ -143,6 +143,22 @@ function commerce_buhsoft_form_alter(&$form, &$form_state, $form_id) {
       if (isset($order_id)) {
         $order = commerce_order_load($order_id);
         if (isset($order)) {
+
+////          dpm($order);
+//
+//          $commerce_line_item_ids = array_map(function ($line) {
+//            return $line['line_item_id'];
+//          }, $order->commerce_line_items['und']);
+//
+//          $commerce_line_items = commerce_line_item_load_multiple($commerce_line_item_ids);
+//
+//          dpm($commerce_line_items);
+
+
+
+
+
+
           if ((empty($order->buhsoft_id)) && ($order->status == variable_get('commerce_buhsoft_order_status_before', 'checkout_complete'))) {
             $form['#submit'][] = 'commerce_buhsoft_commerce_order_view_update_form_submit';
             $form['buh_soft_submit'] = [
@@ -169,17 +185,25 @@ function commerce_buhsoft_form_alter(&$form, &$form_state, $form_id) {
  */
 function commerce_buhsoft_online_checkout($order) {
 
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+
   //проверяем на правильность валюты
-  if ($order->currency != 'RUB') {
-    drupal_set_message(t('Attention! You must convert you store main currency to rubles (RUB)!'), 'error');
-    return;
+  foreach ($order_wrapper->commerce_line_items as $delta => $line_item_wrapper) {
+    $line_item = $line_item_wrapper->value();
+    $wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+    $price = $wrapper->commerce_unit_price->value();
+    if ($price["currency_code"] != 'RUB') {
+      drupal_set_message(t('Attention! You must convert you store main currency to rubles (RUB)!'), 'error');
+      return;
+    }
   }
+
 
   $params = [];
 
   if (!variable_get('commerce_buhsoft_token', '')) {
     drupal_set_message(t('You must setup Buhsoft module initially!'), 'error');
-    drupal_goto('admin/store/settings/commerce_buhsoft');
+    drupal_goto('/admin/commerce/config/advanced-settings/commerce_buhsoft');
     return;
   }
 
@@ -189,17 +213,17 @@ function commerce_buhsoft_online_checkout($order) {
     $params['diller'] = variable_get('commerce_buhsoft_diller', '');
   }
 
-  $params['cms'] = variable_get('commerce_buhsoft_cms', 'Drupal 7 / Ubercart 3');
+  $params['cms'] = variable_get('commerce_buhsoft_cms', 'Drupal 7 / Commerce 1');
 
-  if (isset($order->primary_email)) {
-    $params['email'] = $order->primary_email;
+  if (isset($order_wrapper->mail)) {
+    $params['email'] = $order_wrapper->mail->value();
   }
   else {
     $params['email'] = variable_get('commerce_buhsoft_default_email', '');
   }
 
-  if (isset($order->delivery_phone)) {
-    $params['phone'] = $order->delivery_phone;
+  if (isset($order_wrapper->commerce_customer_shipping)) {
+    $params['phone'] = $order_wrapper->commerce_customer_shipping->value()->phone[LANGUAGE_NONE][0]['value'];
   }
   else {
     $params['phone'] = variable_get('commerce_buhsoft_default_phone', '');
@@ -211,32 +235,35 @@ function commerce_buhsoft_online_checkout($order) {
     $params['name_cashier'] = variable_get('commerce_buhsoft_name_cashier', '');
   }
 
-  $params['price']['nal'] = $order->order_total;
+  $params['price']['nal'] = commerce_currency_amount_to_decimal($order_wrapper->commerce_order_total->amount->value(), $order_wrapper->commerce_order_total->currency_code->value());
 
   //Продажа смотреть тут https://online.buhsoft.ru/online_kassa/docs/dist/index.html
   $params['typeOperation'] = 0;
 
-  $key = 0;
 
-  foreach ($order->products as $key => $product) {
-    $node = node_load($product->nid);
-    $params['data'][$key]['name'] = $product->title;
-    $params['data'][$key]['count'] = $product->qty;
-    $params['data'][$key]['price'] = number_format($product->price, 2, '.', '');
-    $params['data'][$key]['type_nds'] = variable_get('commerce_buhsoft_vat_' . $node->type, 1);
+  foreach ($order_wrapper->commerce_line_items as $delta => $line_item_wrapper) {
+    $line_item = $line_item_wrapper->value();
+    $wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+    $price = $wrapper->commerce_unit_price->value();
 
-  }
-
-  if (isset($order->quote['rate'])) {
-    if ($order->quote['rate'] > 0) {
-      $key++;
-      $params['data'][$key]['name'] = 'Доствка заказа №' . $order->order_id;
-      $params['data'][$key]['count'] = 1;
-      $params['data'][$key]['price'] = number_format($order->quote['rate'], 2, '.', '');
-      $params['data'][$key]['type_nds'] = variable_get('commerce_buhsoft_vat_delivery', 1);
-
+    if (isset($wrapper->commerce_product)) {
+      $params['data'][$delta]['name'] = $wrapper->commerce_product->title->value();
     }
+    else {
+      $params['data'][$delta]['name'] = $wrapper->line_item_label->value();
+    }
+    $params['data'][$delta]['count'] = number_format($wrapper->quantity->value(), 0, '.', '');
+
+    $params['data'][$delta]['price'] = number_format(commerce_currency_amount_to_decimal($price['amount'], $price['currency_code']), 2, '.', '');
+
+    if (isset($wrapper->commerce_product)) {
+      $params['data'][$delta]['type_nds'] = variable_get('commerce_buhsoft_vat_' . $wrapper->commerce_product->type->value(), 1);
+    } else {
+      $params['data'][$delta]['type_nds'] = variable_get('commerce_buhsoft_vat_delivery', 1);
+    }
+
   }
+
 
   $response = _commerce_buhsoft_http_get_request(BUHSOFT_API_URL, BUHSOFT_METHOD_ADD, $params);
 
@@ -263,13 +290,17 @@ function commerce_buhsoft_online_checkout($order) {
   }
   else {
     // записываем ID
-    $order->buhsoft_id = $data->guid;
-    uc_order_save($order);
+    $order_wrapper->buhsoft_id->value = $data->guid;
+    $order_wrapper->save();
+
     $message = t('Buhsoft server responded: guid is "%guid%", time is "%time%".', [
       '%guid%' => $data->guid,
       '%time%' => $data->time,
     ]);
-    uc_order_comment_save($order->order_id, 1, $message, 'admin');
+
+    $order->log = $message;
+    commerce_order_save($order);
+
     drupal_set_message($message, 'status');
     watchdog('status', $message);
 
@@ -288,7 +319,7 @@ function commerce_buhsoft_commerce_order_view_update_form_submit(&$form, &$form_
   if ($form_state['triggering_element']['#name'] == 'to_buhsoft_api') {
     $order_id = (int) arg(3);
     if (isset($order_id)) {
-      $order = uc_order_load($order_id);
+      $order = commerce_order_load($order_id);
       if (isset($order)) {
         commerce_buhsoft_online_checkout($order);
       }
