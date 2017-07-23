@@ -1,0 +1,50 @@
+<?php
+
+/**
+ * Implements hook_requirements().
+ */
+function commerce_buchsoft_requirements($phase) {
+  $requirements = [];
+  $t = get_t();
+
+  $has_curl = function_exists('curl_init');
+
+  $requirements['commerce_buhsoft_curl'] = [
+    'title' => $t('cURL'),
+    'value' => $has_curl ? $t('Enabled') : $t('Not found'),
+  ];
+
+  if (!$has_curl) {
+    $requirements['commerce_buhsoft_curl']['severity'] = REQUIREMENT_ERROR;
+    $requirements['commerce_buhsoft_curl']['description'] = $t("Buhsoft requires the PHP <a href='!curl_url'>cURL</a> library.", ['!curl_url' => 'http://php.net/manual/en/curl.setup.php']);
+  }
+
+  return $requirements;
+}
+
+
+function commerce_buhsoft_install() {
+
+}
+
+/**
+ * Hook uninstall
+ */
+function commerce_buhsoft_uninstall() {
+  $field_name = 'buhsoft_id';
+  $instance = field_info_instance('commerce_order', $field_name, 'commerce_order');
+  field_delete_instance($instance, TRUE);
+  field_delete_field($field_name);
+
+  $field_name = 'phone';
+  $instance = field_info_instance('commerce_customer_profile', $field_name, 'shipping');
+  field_delete_instance($instance, TRUE);
+  field_delete_field($field_name);
+
+  field_purge_batch(10);
+
+  db_query("DELETE FROM {variable} WHERE name LIKE 'commerce_buhsoft_%%'");
+
+}
+
+
