@@ -143,28 +143,24 @@ function commerce_buhsoft_form_alter(&$form, &$form_state, $form_id) {
       if (isset($order_id)) {
         $order = commerce_order_load($order_id);
         if (isset($order)) {
-
-////          dpm($order);
-//
-//          $commerce_line_item_ids = array_map(function ($line) {
-//            return $line['line_item_id'];
-//          }, $order->commerce_line_items['und']);
-//
-//          $commerce_line_items = commerce_line_item_load_multiple($commerce_line_item_ids);
-//
-//          dpm($commerce_line_items);
-
-
-
-
-
+          $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
 
           if ((empty($order->buhsoft_id)) && ($order->status == variable_get('commerce_buhsoft_order_status_before', 'checkout_complete'))) {
             $form['#submit'][] = 'commerce_buhsoft_commerce_order_view_update_form_submit';
-            $form['buh_soft_submit'] = [
+
+            $form['buhsoft_submit'] = [
               '#type' => 'submit',
               '#name' => 'to_buhsoft_api',
               '#value' => t('To Buhsoft checkout'),
+            ];
+            return $form;
+            break;
+          }
+          elseif ($order->buhsoft_id) {
+            $form['buhsoft_id_markup'] = [
+              '#type' => 'item',
+              '#title' => t('Buhsoft id:'),
+              '#markup' => $order_wrapper->buhsoft_id->value(),
             ];
             return $form;
             break;
@@ -258,7 +254,8 @@ function commerce_buhsoft_online_checkout($order) {
 
     if (isset($wrapper->commerce_product)) {
       $params['data'][$delta]['type_nds'] = variable_get('commerce_buhsoft_vat_' . $wrapper->commerce_product->type->value(), 1);
-    } else {
+    }
+    else {
       $params['data'][$delta]['type_nds'] = variable_get('commerce_buhsoft_vat_delivery', 1);
     }
 
@@ -290,7 +287,7 @@ function commerce_buhsoft_online_checkout($order) {
   }
   else {
     // записываем ID
-    $order_wrapper->buhsoft_id->value = $data->guid;
+    $order_wrapper->buhsoft_id = $data->guid;
     $order_wrapper->save();
 
     $message = t('Buhsoft server responded: guid is "%guid%", time is "%time%".', [
@@ -362,134 +359,6 @@ function _commerce_buhsoft_http_get_request($url, $method, $params) {
   //странно но не работает через передачу параметров не через командную строку а как положено.
   return drupal_http_request($url . $method . '?' . http_build_query($params));
 }
-
-
-/**
- * Implements hook_uc_order_pane_alter().
- */
-function commerce_buhsoft_uc_order_pane_alter(&$panes) {
-  $panes['payment']['callback'] = 'commerce_buhsoft_uc_payment_pane_callback';
-}
-
-
-/**
- * Переделываем панели
- *
- * @param $op
- * @param $order
- * @param null $form
- * @param null $form_state
- *
- * @return string
- */
-function commerce_buhsoft_uc_payment_pane_callback($op, $order, &$form = NULL, &$form_state = NULL) {
-  switch ($op) {
-    case 'view':
-      $build['balance'] = ['#markup' => t('Balance: @balance', ['@balance' => uc_currency_format(uc_payment_balance($order))])];
-
-      if (user_access('view payments')) {
-        $build['view_payments'] = [
-          '#markup' => ' (' . l(t('View'), 'admin/store/orders/' . $order->order_id . '/payments') . ')',
-        ];
-      }
-
-      $method_name = _uc_payment_method_data($order->payment_method, 'review');
-      if (empty($method_name)) {
-        $method_name = _uc_payment_method_data($order->payment_method, 'name');
-      }
-      $build['method'] = [
-        '#markup' => t('Method: @payment_method', ['@payment_method' => $method_name]),
-        '#prefix' => '<br />',
-      ];
-      $func = _uc_payment_method_data($order->payment_method, 'callback');
-      if (function_exists($func)) {
-        $method_output = $func('order-view', $order);
-        if (!empty($method_output)) {
-          $build['output'] = $method_output + [
-              '#prefix' => '<br />',
-            ];
-        }
-      }
-
-      $build['buhsoft_id'] = [
-        '#prefix' => '<br />',
-        '#markup' => t('Buhsoft transaction ID: %buhsoft_id%', ['%buhsoft_id%' => $order->buhsoft_id]),
-      ];
-      return $build;
-
-    case 'customer':
-      $method_name = _uc_payment_method_data($order->payment_method, 'review');
-      if (empty($method_name)) {
-        $method_name = _uc_payment_method_data($order->payment_method, 'name');
-      }
-      $build['method'] = ['#markup' => t('Method: @payment_method', ['@payment_method' => $method_name])];
-      $func = _uc_payment_method_data($order->payment_method, 'callback');
-      if (function_exists($func)) {
-        $method_output = $func('customer-view', $order);
-        if (!empty($method_output)) {
-          $build['output'] = $method_output + [
-              '#prefix' => '<br />',
-            ];
-        }
-      }
-
-      return $build;
-
-    case 'edit-form':
-      $methods = _uc_payment_method_list();
-      $options = [];
-      foreach ($methods as $id => $method) {
-        $options[$id] = $method['name'];
-      }
-      $form['payment']['payment_method'] = [
-        '#type' => 'select',
-        '#title' => t('Payment method'),
-        '#default_value' => $order->payment_method,
-        '#options' => !empty($options) ? $options : [t('None available')],
-        '#disabled' => empty($options),
-        '#ajax' => [
-          'callback' => 'uc_payment_order_pane_ajax_callback',
-          'progress' => ['type' => 'throbber'],
-          'wrapper' => 'payment-details',
-        ],
-      ];
-
-      $form['payment']['payment_details'] = [
-        '#tree' => TRUE,
-        '#prefix' => '<div id="payment-details">',
-        '#suffix' => '</div>',
-      ];
-
-      $method = isset($form_state['values']['payment_method']) ? $form_state['values']['payment_method'] : $order->payment_method;
-      $func = _uc_payment_method_data($method, 'callback');
-      if (function_exists($func) && $details = $func('order-details', $order)) {
-        if (is_array($details)) {
-          $form['payment']['payment_details'] += $details;
-        }
-        else {
-          $form['payment']['payment_details']['#markup'] = $details;
-        }
-      }
-      return $form;
-
-    case 'edit-theme':
-      return drupal_render($form['payment']);
-
-    case 'edit-process':
-      $changes['payment_method'] = $form_state['values']['payment_method'];
-      $changes['payment_details'] = isset($form_state['values']['payment_details']) ? $form_state['values']['payment_details'] : [];
-      $func = _uc_payment_method_data($form_state['values']['payment_method'], 'callback');
-      if (function_exists($func) && ($return = $func('edit-process', $order, $form, $form_state)) != NULL && is_array($return)) {
-        $changes['payment_details'] = array_merge($changes['payment_details'], $return);
-      }
-
-      if (!isset($order->payment_details)) {
-        $order->payment_details = [];
-      }
-      return $changes;
-  }
-}
-
 
 /**
  * Возвращаем в форму статус сервера

@@ -10,10 +10,10 @@
  * Implements hook_rules_data_info().
  */
 function commerce_buhsoft_rules_data_info() {
-    $types['uc_order'] = array(
-        'label' => t('Ubercart order object'),
+    $types['commerce_payment'] = array(
+        'label' => t('Commerce order object'),
         'wrap' => TRUE,
-        'group' => t('Ubercart'),
+        'group' => t('Commerce Payment'),
     );
 
     return $types;
@@ -25,11 +25,11 @@ function commerce_buhsoft_rules_data_info() {
 function commerce_buhsoft_rules_event_info() {
     $events['commerce_buhsoft_online_checkout'] = array(
         'label' => t('Buhsoft online checkout'),
-        'group' => t('Order'),
+        'group' => t('Commerce Payment'),
         'variables' => array(
-            'order' => array(
-                'type' => 'uc_order',
-                'label' => t('Ubercart order'),
+            'commerce_order' => array(
+                'type' => 'commerce_order',
+                'label' => t('Commerce order'),
             ),
         ),
     );
@@ -43,16 +43,16 @@ function commerce_buhsoft_rules_event_info() {
 function commerce_buhsoft_rules_action_info() {
 
     $order_arg = array(
-        'type' => 'uc_order',
-        'label' => t('Order'),
+        'type' => 'commerce_order',
+        'label' => t('Commerce order'),
     );
 
     $actions['commerce_buhsoft_online_checkout'] = array(
         'label' => t('Buhsoft online checkout'),
-        'group' => t('Order'),
+        'group' => t('Commerce Payment'),
         'base' => 'commerce_buhsoft_online_checkout',
         'parameter' => array(
-            'order' => $order_arg
+            'commerce_order' => $order_arg
         ),
     );
 
