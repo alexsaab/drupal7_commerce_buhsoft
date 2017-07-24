@@ -451,3 +451,29 @@ function _commerce_buhsoft_get_formated_order_statuses() {
 
   return $options;
 }
+
+
+/**
+ * Функция возвращающая метод оплаты заказа (в последней транзакции)
+ * Если транзакций по оплате нет, то возвращается 0
+ *
+ * @param $order
+ *
+ * @return null
+ */
+function _commerce_buhsoft_get_payment_method_for_order($order){
+  $payment_method = null;
+  $query = new \EntityFieldQuery();
+  $query->entityCondition('entity_type', 'commerce_payment_transaction')
+    ->propertyCondition('order_id', $order->order_id);
+
+  $results = $query->execute();
+  if (!empty($results['commerce_payment_transaction'])) {
+    $transactions = entity_load('commerce_payment_transaction', array_keys($results['commerce_payment_transaction']));
+    foreach ($transactions as $transaction) {
+      $payment_method = $transaction->payment_method;
+    }
+  }
+
+  return $payment_method;
+}
