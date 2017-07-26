@@ -23,12 +23,8 @@ function commerce_buchsoft_requirements($phase) {
 }
 
 
-function commerce_buhsoft_install() {
-
-}
-
 /**
- * Hook uninstall
+ * Implements hook_uninstall().
  */
 function commerce_buhsoft_uninstall() {
   $field_name = 'buhsoft_id';

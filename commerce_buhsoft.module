@@ -175,8 +175,8 @@ function commerce_buhsoft_form_alter(&$form, &$form_state, $form_id) {
 }
 
 /**
- * Большая функция, которая непосредственно и все отправляет в онлайн кассу
- *
+ * Большая функция, которая непосредственно и все отправляет в онлайн кассу через
+ * get запрос
  * @param $order
  */
 function commerce_buhsoft_online_checkout($order) {
